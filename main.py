@@ -1,181 +1,158 @@
 import sys
-from typing import List, Tuple, Set, Optional
+from typing import List, Tuple, Optional
 
 
-def read_teams_from_input() -> List[str]:
-	print("Nhập danh sách đội bóng, phân tách bằng dấu phẩy (ví dụ: A,B,C,D):", end=" ")
-	line = sys.stdin.readline().strip()
-	if not line:
-		return ["A", "B", "C", "D"]
-	teams = [name.strip() for name in line.split(",") if name.strip()]
-	seen = set()
-	unique_teams = []
-	for t in teams:
-		if t not in seen:
-			seen.add(t)
-			unique_teams.append(t)
-	return unique_teams
+def normalize_teams(raw_teams: List[str]) -> List[str]:
+    cleaned = [t.strip() for t in raw_teams if t.strip()]
+    if not cleaned:
+        raise ValueError("Danh sách đội bóng trống.")
+    # Loại bỏ trùng lặp nhưng vẫn giữ thứ tự
+    seen = set()
+    unique: List[str] = []
+    for t in cleaned:
+        if t.lower() not in seen:
+            unique.append(t)
+            seen.add(t.lower())
+    return unique
 
 
-def generate_round_robin_backtracking(teams: List[str]) -> List[List[Tuple[str, str]]]:
-	bye_token: Optional[str] = None
-	if len(teams) % 2 == 1:
-		bye_token = "(BYE)"
-		teams = teams + [bye_token]
-
-	num_teams = len(teams)
-	num_rounds = num_teams - 1
-	teams_per_round = num_teams // 2
-
-	all_pairs: Set[frozenset[str]] = set()
-	for i in range(num_teams):
-		for j in range(i + 1, num_teams):
-			if bye_token is not None and (teams[i] == bye_token or teams[j] == bye_token):
-				continue
-			all_pairs.add(frozenset((teams[i], teams[j])))
-
-	schedule: List[List[Tuple[str, str]]] = [[] for _ in range(num_rounds)]
-	used_pairs: Set[frozenset[str]] = set()
-
-	def build_round(round_index: int) -> bool:
-		if round_index == num_rounds:
-			return len(used_pairs) == len(all_pairs)
-
-		used_in_round: Set[str] = set()
-		pairs_this_round: List[Tuple[str, str]] = []
-
-		def place_pair() -> bool:
-			if len(pairs_this_round) == teams_per_round:
-				schedule[round_index] = pairs_this_round.copy()
-				return build_round(round_index + 1)
-
-			first_team: Optional[str] = None
-			for t in teams:
-				if t not in used_in_round:
-					first_team = t
-					break
-			if first_team is None:
-				return False
-
-			for other_team in teams:
-				if other_team == first_team or other_team in used_in_round:
-					continue
-
-				pair_key = None if bye_token in (first_team, other_team) else frozenset((first_team, other_team))
-				if pair_key is not None and pair_key in used_pairs:
-					continue
-
-				used_in_round.add(first_team)
-				used_in_round.add(other_team)
-				pairs_this_round.append((first_team, other_team))
-				if pair_key is not None:
-					used_pairs.add(pair_key)
-
-				if place_pair():
-					return True
-
-				if pair_key is not None:
-					used_pairs.remove(pair_key)
-				pairs_this_round.pop()
-				used_in_round.remove(first_team)
-				used_in_round.remove(other_team)
-
-			return False
-
-		return place_pair()
-
-	if build_round(0):
-		for r in range(len(schedule)):
-			schedule[r] = sorted(schedule[r], key=lambda ab: (ab[0], ab[1]))
-		return schedule
-
-	return []
+def build_pairs(num_teams: int) -> List[Tuple[int, int]]:
+    pairs: List[Tuple[int, int]] = []
+    for i in range(num_teams):
+        for j in range(i + 1, num_teams):
+            pairs.append((i, j))
+    return pairs
 
 
-def format_schedule_text(schedule: List[List[Tuple[str, str]]]) -> str:
-	if not schedule:
-		return "Không thể tạo lịch thi đấu hợp lệ."
-	lines: List[str] = []
-	for round_index, matches in enumerate(schedule, start=1):
-		lines.append(f"Vòng {round_index}:")
-		for home, away in matches:
-			if "(BYE)" in (home, away):
-				team = home if away == "(BYE)" else away
-				lines.append(f"  {team} nghỉ")
-			else:
-				lines.append(f"  {home} vs {away}")
-		lines.append("")
-	return "\n".join(lines).strip()
+def order_pairs_heuristic(pairs: List[Tuple[int, int]], num_teams: int) -> List[Tuple[int, int]]:
+    # Heuristic: ưu tiên cặp có đội xuất hiện nhiều (theo bậc) để ràng buộc sớm
+    degree = [0] * num_teams
+    for a, b in pairs:
+        degree[a] += 1
+        degree[b] += 1
+    return sorted(pairs, key=lambda ab: -(degree[ab[0]] + degree[ab[1]]))
 
 
-def pretty_print_schedule(schedule: List[List[Tuple[str, str]]]) -> None:
-	print(format_schedule_text(schedule))
+def backtrack_schedule(num_teams: int) -> List[List[Tuple[int, int]]]:
+    # Nếu số đội lẻ, thêm BYE (nghỉ)
+    has_bye = (num_teams % 2 == 1)
+    teams_with_bye = num_teams + 1 if has_bye else num_teams
+
+    rounds_count = teams_with_bye - 1
+    matches_per_round = teams_with_bye // 2
+
+    all_pairs = build_pairs(teams_with_bye)
+    all_pairs = order_pairs_heuristic(all_pairs, teams_with_bye)
+
+    rounds: List[List[Tuple[int, int]]] = [[] for _ in range(rounds_count)]
+    used_in_round: List[set] = [set() for _ in range(rounds_count)]
+
+    def can_place(pair: Tuple[int, int], r: int) -> bool:
+        a, b = pair
+        if len(rounds[r]) >= matches_per_round:
+            return False
+        if a in used_in_round[r] or b in used_in_round[r]:
+            return False
+        return True
+
+    def dfs(idx: int) -> bool:
+        if idx == len(all_pairs):
+            return True
+        a, b = all_pairs[idx]
+        # Tối ưu nhỏ: thử các vòng có khoảng trống trước
+        candidate_rounds = sorted(range(rounds_count), key=lambda r: len(rounds[r]))
+        for r in candidate_rounds:
+            if can_place((a, b), r):
+                rounds[r].append((a, b))
+                used_in_round[r].add(a)
+                used_in_round[r].add(b)
+                if dfs(idx + 1):
+                    return True
+                rounds[r].pop()
+                used_in_round[r].remove(a)
+                used_in_round[r].remove(b)
+        return False
+
+    ok = dfs(0)
+    if not ok:
+        raise RuntimeError("Không thể sắp xếp lịch thi đấu với backtracking.")
+
+    # Nếu có BYE, giữ nguyên chỉ số, người gọi sẽ lọc khi hiển thị
+    return rounds
 
 
-def launch_gui() -> None:
-	import tkinter as tk
-	from tkinter import ttk
+def mirror_double_round_robin(rounds: List[List[Tuple[int, int]]]) -> List[List[Tuple[int, int]]]:
+    second_half: List[List[Tuple[int, int]]] = []
+    for r in rounds:
+        mirrored = [(b, a) for (a, b) in r]
+        second_half.append(mirrored)
+    return rounds + second_half
 
-	root = tk.Tk()
-	root.title("Xếp lịch thi đấu (Backtracking)")
 
-	# Input frame
-	frame_input = ttk.Frame(root, padding=10)
-	frame_input.pack(fill="x")
+def format_schedule(rounds: List[List[Tuple[int, int]]], team_names: List[str]) -> str:
+    has_bye = (len(team_names) % 2 == 1)
+    bye_index: Optional[int] = None
+    names = team_names
+    if has_bye:
+        bye_index = len(team_names)
+        names = team_names + ["BYE"]
 
-	label = ttk.Label(frame_input, text="Nhập danh sách đội (phân tách dấu phẩy):")
-	label.pack(anchor="w")
+    lines: List[str] = []
+    for i, r in enumerate(rounds, start=1):
+        lines.append(f"Vòng {i}:")
+        for a, b in r:
+            # Ẩn trận có BYE khỏi danh sách
+            if (bye_index is not None) and (a == bye_index or b == bye_index):
+                continue
+            home = names[a]
+            away = names[b]
+            lines.append(f"  - {home} vs {away}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
-	teams_var = tk.StringVar(value="A,B,C,D")
-	entry = ttk.Entry(frame_input, textvariable=teams_var)
-	entry.pack(fill="x")
 
-	# Buttons
-	frame_btn = ttk.Frame(root, padding=(10, 0))
-	frame_btn.pack(fill="x")
+def parse_input() -> Tuple[List[str], bool]:
+    print("Nhập tên các đội, ngăn cách bởi dấu phẩy (ví dụ: A,B,C,D):")
+    raw = sys.stdin.readline().strip()
+    if not raw:
+        print("Không nhập tên đội. Sẽ dùng tên mặc định: Team 1..n")
+        print("Nhập số lượng đội (>=2):")
+        n_str = sys.stdin.readline().strip()
+        try:
+            n = int(n_str)
+        except Exception:
+            raise ValueError("Số lượng đội không hợp lệ.")
+        if n < 2:
+            raise ValueError("Cần ít nhất 2 đội.")
+        teams = [f"Team {i+1}" for i in range(n)]
+    else:
+        teams = normalize_teams(raw.split(","))
+        if len(teams) < 2:
+            raise ValueError("Cần ít nhất 2 đội.")
 
-	def on_generate() -> None:
-		text_output.configure(state="normal")
-		text_output.delete("1.0", tk.END)
-		teams_input = [name.strip() for name in teams_var.get().split(",") if name.strip()]
-		if len(teams_input) < 2:
-			text_output.insert(tk.END, "Cần ít nhất 2 đội để xếp lịch.")
-			text_output.configure(state="disabled")
-			return
-		schedule = generate_round_robin_backtracking(teams_input)
-		text_output.insert(tk.END, format_schedule_text(schedule))
-		text_output.configure(state="disabled")
-
-	btn = ttk.Button(frame_btn, text="Xếp lịch", command=on_generate)
-	btn.pack(anchor="w")
-
-	# Output
-	frame_out = ttk.Frame(root, padding=10)
-	frame_out.pack(fill="both", expand=True)
-
-	text_output = tk.Text(frame_out, height=20, wrap="word")
-	text_output.pack(side="left", fill="both", expand=True)
-
-	scroll = ttk.Scrollbar(frame_out, orient="vertical", command=text_output.yview)
-	scroll.pack(side="right", fill="y")
-	text_output.configure(yscrollcommand=scroll.set)
-	text_output.configure(state="disabled")
-
-	root.mainloop()
+    print("Chế độ lượt đi-lượt về? (y/n, mặc định: n):")
+    mode = sys.stdin.readline().strip().lower()
+    double_rr = (mode == "y" or mode == "yes")
+    return teams, double_rr
 
 
 def main() -> None:
-	# Nếu chạy với --gui thì mở giao diện, ngược lại dùng CLI như cũ
-	if any(arg.lower() == "--gui" for arg in sys.argv[1:]):
-		launch_gui()
-		return
-	teams = read_teams_from_input()
-	if len(teams) < 2:
-		print("Cần ít nhất 2 đội để xếp lịch.")
-		return
-	schedule = generate_round_robin_backtracking(teams)
-	pretty_print_schedule(schedule)
+    try:
+        teams, double_rr = parse_input()
+        n = len(teams)
+
+        # Xây lịch (thêm BYE nội bộ nếu lẻ)
+        base_rounds = backtrack_schedule(n)
+        rounds = mirror_double_round_robin(base_rounds) if double_rr else base_rounds
+
+        output = format_schedule(rounds, teams)
+        print("\nLịch thi đấu:")
+        print(output)
+    except Exception as e:
+        print(f"Lỗi: {e}")
 
 
 if __name__ == "__main__":
-	main()
+    main()
+
+
